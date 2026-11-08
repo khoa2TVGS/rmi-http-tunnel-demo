@@ -108,6 +108,11 @@ final class HistogramTool implements Tool {
         StackPane holder = new StackPane(canvas);
         holder.setPadding(new Insets(12));
         holder.setStyle("-fx-background-color: #ffffff;");
+        // An unmanaged Canvas does not feed the StackPane's preferred size. Without
+        // this the bound width becomes the holder's minimum, so shrinking the window
+        // clipped the plot instead of reflowing it (and the canvas never redrew).
+        canvas.setManaged(false);
+        canvas.relocate(12, 12);
         canvas.widthProperty().bind(holder.widthProperty().subtract(24));
         canvas.heightProperty().bind(holder.heightProperty().subtract(24));
         canvas.widthProperty().addListener((o, a, b) -> draw());

@@ -88,6 +88,22 @@ public class LabApp extends Application {
 
         stage.setTitle("RMI Tunnel Lab");
         stage.setScene(scene);
+        // Open no larger than the usable screen. At 150% scaling a 1280x720 window
+        // is wider than a 1920x1080 display in logical pixels, and the window
+        // manager then clips it rather than letting the layout shrink.
+        javafx.geometry.Rectangle2D screen = javafx.stage.Screen.getPrimary().getVisualBounds();
+        double winWidth = Math.min(1280, screen.getWidth() - 40);
+        double winHeight = Math.min(720, screen.getHeight() - 40);
+        String win = value(args, "--win");
+        if (win != null && win.contains("x")) {
+            String[] wh = win.split("x");
+            winWidth = Double.parseDouble(wh[0]);
+            winHeight = Double.parseDouble(wh[1]);
+        }
+        stage.setWidth(winWidth);
+        stage.setHeight(winHeight);
+        stage.setMinWidth(720);
+        stage.setMinHeight(480);
         stage.show();
 
         String shot = value(args, "--shot");
