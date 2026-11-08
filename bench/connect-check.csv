@@ -1,0 +1,2 @@
+network,mode,workload,payload_bytes,iterations,mean_total_ms,mean_server_ms,mean_transfer_ms,mbps,sha256_ok
+dist,connect,echo,524288,3,11,,11,90.9,true

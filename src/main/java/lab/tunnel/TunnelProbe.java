@@ -44,7 +44,7 @@ public final class TunnelProbe {
         System.out.println("echo target  : 127.0.0.1:" + echoPort);
 
         long openStart = System.nanoTime();
-        TunnelSocket tunnel = TunnelClient.open(relayHost, relayPort, "127.0.0.1", echoPort);
+        TunnelSocket tunnel = TunnelClient.openChunked(relayHost, relayPort, "127.0.0.1", echoPort, "");
         System.out.println("relay        : " + relayHost + ":" + relayPort);
         System.out.println("tunnel open  : " + (System.nanoTime() - openStart) / 1_000_000 + " ms  " + tunnel);
 

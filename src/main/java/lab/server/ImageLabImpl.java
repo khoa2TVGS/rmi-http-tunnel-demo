@@ -52,4 +52,9 @@ public class ImageLabImpl implements ImageLab {
         }
         return hist;
     }
+
+    @Override
+    public byte[] echo(byte[] payload) throws RemoteException {
+        return payload;
+    }
 }
