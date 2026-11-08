@@ -2,11 +2,14 @@ package lab.client;
 
 import java.awt.image.BufferedImage;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import lab.common.Bytes;
 import lab.common.FilterSpec;
+import lab.common.Histogram;
 import lab.common.ImageLab;
 import lab.common.ImageResult;
+import lab.common.PaletteResult;
 import lab.common.SynthImage;
 import lab.tunnel.TunnelSocketFactory;
 
@@ -24,6 +27,8 @@ public final class TunnelClientMain {
         int size = 1024;
         boolean noise = false;
         String filter = "grayscale";
+        String op = "filter";
+        int colors = 8;
         double radius = 6;
         int repeat = 1;
 
@@ -36,6 +41,8 @@ public final class TunnelClientMain {
                 case "--size" -> size = Integer.parseInt(args[++i]);
                 case "--noise" -> noise = true;
                 case "--filter" -> filter = args[++i];
+                case "--op" -> op = args[++i];
+                case "--colors" -> colors = Integer.parseInt(args[++i]);
                 case "--radius" -> radius = Double.parseDouble(args[++i]);
                 case "--repeat" -> repeat = Integer.parseInt(args[++i]);
                 default -> {
@@ -61,6 +68,41 @@ public final class TunnelClientMain {
         BufferedImage img = SynthImage.generate(size, noise);
         byte[] png = SynthImage.toPng(img);
         String sentSha = Bytes.sha256Hex(png);
+
+        if ("histogram".equals(op)) {
+            long t0 = System.nanoTime();
+            Histogram h = lab.histogram(png);
+            long roundTrip = (System.nanoTime() - t0) / 1_000_000L;
+            System.out.printf("source       : %d x %d, %s%n",
+                    img.getWidth(), img.getHeight(), Bytes.human(png.length));
+            System.out.println("op           : histogram");
+            System.out.printf("round trip   : %d ms (one call, both ways)%n", roundTrip);
+            System.out.printf("pixels       : %d%n", h.pixels());
+            System.out.printf("mean luma    : %s%n", String.format(Locale.ROOT, "%.1f", h.meanLuma()));
+            System.out.printf("peak bin     : %d%n", h.peakLuma());
+            System.out.printf("reply        : 4 x 256 ints (%d bytes of numbers)%n", 4 * 256 * 4);
+            return;
+        }
+
+        if ("palette".equals(op)) {
+            long t0 = System.nanoTime();
+            PaletteResult r = lab.quantize(png, colors);
+            long roundTrip = (System.nanoTime() - t0) / 1_000_000L;
+            System.out.printf("source       : %d x %d, %s%n",
+                    img.getWidth(), img.getHeight(), Bytes.human(png.length));
+            System.out.printf("op           : palette, k=%d%n", colors);
+            System.out.printf("round trip   : %d ms%n", roundTrip);
+            System.out.printf("server work  : %d ms%n", r.computeMillis());
+            System.out.printf("colours kept : %d%n", r.colors().length);
+            StringBuilder hex = new StringBuilder();
+            for (int c : r.colors()) {
+                hex.append(String.format("#%06x ", c & 0xffffff));
+            }
+            System.out.println("palette      : " + hex.toString().trim());
+            System.out.printf("result       : %d x %d, %s%n",
+                    r.width(), r.height(), Bytes.human(r.png().length));
+            return;
+        }
 
         Map<String, Double> params = new HashMap<>();
         params.put("radius", radius);

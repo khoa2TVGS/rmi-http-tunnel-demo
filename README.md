@@ -32,13 +32,17 @@ dist\run-ui.cmd           # the JavaFX client
 ```
 
 In the client: transport `Tunnel (chunked)`, relay `127.0.0.1:8080`, press Connect.
-Filter, radius and noise are live; every round trip prints its timings and a
-SHA-256 check of both directions.
+`Tunnel (CONNECT)` is the same tunnel in its other HTTP form, and `Direct` skips
+the relay entirely for a baseline. **Disconnect** closes the tunnel's sockets and
+unlocks the bar, so you can switch transport without restarting the app. Every
+round trip reports its timings and a SHA-256 check of both directions.
 
 The same path from the command line, no window:
 
 ```
 dist\run-cli.cmd --relay 127.0.0.1:8080 --size 1024 --filter blur --radius 6
+dist\run-cli.cmd --relay 127.0.0.1:8080 --size 512 --op histogram
+dist\run-cli.cmd --relay 127.0.0.1:8080 --size 512 --op palette --colors 6
 dist\stop-all.cmd        # stop whatever is holding a port
 ```
 
@@ -75,15 +79,33 @@ which is why the default is closed.
 
 ## The UI
 
-* **Image lab** — pick a synthetic image, choose a filter (grayscale, posterize,
-  sobel, blur), connect, press *Run*. Shows both images, the timings (round trip,
-  server work, transfer) and the integrity verdict.
-* **Benchmark** — runs the measurement matrix by spawning one child JVM per
-  (workload, mode) pair, because RMI latches the global socket factory per
-  process. Results land in `bench/results.csv` and in the chart and table.
+One connection bar at the top, one tab per tool. Connect installs the selected
+transport and locks the bar; Disconnect closes the tunnel's sockets and unlocks
+it. The socket factory itself can only be installed once per JVM, so it is
+installed through a switchable wrapper that is retargeted instead of replaced.
 
-![Image lab](doc/ui-lab.png)
-![Benchmark](doc/ui-bench.png)
+* **Image filter** — pick a synthetic image, choose a filter (grayscale,
+  posterize, sobel, blur, resize), press *Run*. Shows both images, the timings
+  (round trip, server work, transfer) and the integrity verdict.
+* **Transform** — rotate 90/180/270, flip, or crop with a margin slider. These
+  ride the existing `transform` call; no new remote method was needed.
+* **Histogram** — the service returns 256-bin arrays for red, green, blue and
+  luma; the tab draws them and reports mean luma and the peak bin.
+* **Palette** — k-means colour quantisation with 2 to 32 colours, plus the
+  returned palette drawn as swatches.
+* **Benchmark** — runs the measurement matrix by spawning one child JVM per
+  (workload, mode) pair, because of that same one-shot latch. Results land in
+  `bench/results.csv` and in the chart and table.
+* **Tunnel inspector** — the transport with RMI taken out of the picture.
+  *Run probe* pumps N MB through the relay to a throw-away echo server and
+  verifies SHA-256; *Capture handshake* prints the bytes of one handshake. Both
+  honour the toolbar's chaos field (`buffer=N`, `delay=N` ms, `drop=N` bytes), so
+  you can watch what a buffering proxy does to a call.
+
+![Image filter](doc/ui-sample.png)
+![Transform](doc/ui-transform.png)
+![Histogram](doc/ui-histogram.png)
+![Palette](doc/ui-palette.png)
 
 ## Command line tools
 
@@ -116,7 +138,7 @@ make-dist.cmd            # rebuild dist/ (jars + launchers)
 | --- | --- |
 | `Port already in use: 1100` | an old server is still running: `dist\stop-all.cmd` |
 | `Address already in use: bind` (relay) | same, for 8080 |
-| `a different RMI socket factory is already installed in this JVM` | the client switched transport after connecting; restart it |
+| `UnmarshalException ... Socket closed` right after Disconnect | RMI still holds the connection it just closed; Connect retries for ~160 ms. A persistent failure means the relay or the server is down. |
 | Connect hangs, no relay log line | the request never arrived: wrong IP, or a firewall on 8080 |
 | Connect hangs, relay log line present | the relay dialled the target and got nothing: is the RMI server up? |
 | `ClassNotFoundException` / serialVersionUID mismatch | client and server built from different trees; rebuild both |

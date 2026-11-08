@@ -18,11 +18,23 @@ import lab.common.Bytes;
 public final class TunnelProbe {
     private TunnelProbe() {}
 
+    /** @param megabytes payload size in MB; @return timing, integrity and a printable transcript. */
+    public record Report(boolean identical, long millis, int bytes, String text) {}
+
     public static void main(String[] args) throws Exception {
         String relayHost = args.length > 0 ? args[0] : "127.0.0.1";
         int relayPort = args.length > 1 ? Integer.parseInt(args[1]) : 8080;
         int megabytes = args.length > 2 ? Integer.parseInt(args[2]) : 10;
+        Report report = probe(relayHost, relayPort, megabytes, "");
+        System.out.print(report.text());
+        if (!report.identical()) {
+            System.exit(1);
+        }
+    }
 
+    public static Report probe(String relayHost, int relayPort, int megabytes, String chaos)
+            throws IOException, InterruptedException {
+        StringBuilder log = new StringBuilder();
         ServerSocket echo = new ServerSocket(0, 10, InetAddress.getLoopbackAddress());
         int echoPort = echo.getLocalPort();
         Thread acceptor = new Thread(() -> {
@@ -41,42 +53,49 @@ public final class TunnelProbe {
         }, "echo");
         acceptor.setDaemon(true);
         acceptor.start();
-        System.out.println("echo target  : 127.0.0.1:" + echoPort);
+        log.append("echo target  : 127.0.0.1:").append(echoPort).append('\n');
 
-        long openStart = System.nanoTime();
-        TunnelSocket tunnel = TunnelClient.openChunked(relayHost, relayPort, "127.0.0.1", echoPort, "");
-        System.out.println("relay        : " + relayHost + ":" + relayPort);
-        System.out.println("tunnel open  : " + (System.nanoTime() - openStart) / 1_000_000 + " ms  " + tunnel);
+        try {
+            long openStart = System.nanoTime();
+            TunnelSocket tunnel = TunnelClient.openChunked(relayHost, relayPort, "127.0.0.1", echoPort, chaos);
+            log.append("relay        : ").append(relayHost).append(':').append(relayPort).append('\n');
+            if (chaos != null && !chaos.isBlank()) {
+                log.append("chaos        : ").append(chaos).append('\n');
+            }
+            log.append("tunnel open  : ").append((System.nanoTime() - openStart) / 1_000_000).append(" ms  ")
+                    .append(tunnel).append('\n');
 
-        byte[] payload = new byte[megabytes * 1024 * 1024];
-        new Random(7L).nextBytes(payload);
-        String sentSha = Bytes.sha256Hex(payload);
+            byte[] payload = new byte[megabytes * 1024 * 1024];
+            new Random(7L).nextBytes(payload);
+            String sentSha = Bytes.sha256Hex(payload);
 
-        byte[] echoed = new byte[payload.length];
-        boolean[] readOk = {false};
-        Thread reader = new Thread(() -> readOk[0] = readFully(tunnel.getInputStream(), echoed), "reader");
-        reader.setDaemon(true);
+            byte[] echoed = new byte[payload.length];
+            boolean[] readOk = {false};
+            Thread reader = new Thread(() -> readOk[0] = readFully(tunnel.getInputStream(), echoed), "reader");
+            reader.setDaemon(true);
 
-        long start = System.nanoTime();
-        reader.start();
-        OutputStream out = tunnel.getOutputStream();
-        for (int off = 0; off < payload.length; off += 32 * 1024) {
-            int n = Math.min(32 * 1024, payload.length - off);
-            out.write(payload, off, n);
-        }
-        out.flush();
-        reader.join();
-        long millis = Math.max(1, (System.nanoTime() - start) / 1_000_000);
+            long start = System.nanoTime();
+            reader.start();
+            OutputStream out = tunnel.getOutputStream();
+            for (int off = 0; off < payload.length; off += 32 * 1024) {
+                int n = Math.min(32 * 1024, payload.length - off);
+                out.write(payload, off, n);
+            }
+            out.flush();
+            reader.join();
+            long millis = Math.max(1, (System.nanoTime() - start) / 1_000_000);
 
-        boolean identical = readOk[0] && Arrays.equals(payload, echoed);
-        System.out.printf("bytes        : %s each way%n", Bytes.human(payload.length));
-        System.out.printf("elapsed      : %d ms%n", millis);
-        System.out.printf("throughput   : %.1f MB/s%n", payload.length / 1048576.0 / (millis / 1000.0));
-        System.out.printf("sha256       : %s%n", sentSha.substring(0, 16) + " ...");
-        System.out.printf("integrity    : %s%n", identical ? "ok, byte-identical" : "MISMATCH");
-        tunnel.close();
-        if (!identical) {
-            System.exit(1);
+            boolean identical = readOk[0] && Arrays.equals(payload, echoed);
+            log.append("bytes        : ").append(Bytes.human(payload.length)).append(" each way\n");
+            log.append("elapsed      : ").append(millis).append(" ms\n");
+            log.append(String.format(java.util.Locale.ROOT, "throughput   : %.1f MB/s%n",
+                    payload.length / 1048576.0 / (millis / 1000.0)));
+            log.append("sha256       : ").append(sentSha, 0, 16).append(" ...\n");
+            log.append("integrity    : ").append(identical ? "ok, byte-identical" : "MISMATCH").append('\n');
+            tunnel.close();
+            return new Report(identical, millis, payload.length, log.toString());
+        } finally {
+            echo.close();
         }
     }
 
