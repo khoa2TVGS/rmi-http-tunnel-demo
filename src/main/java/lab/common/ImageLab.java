@@ -10,9 +10,14 @@ public interface ImageLab extends Remote {
 
     List<String> filters() throws RemoteException;
 
+    /** Filters, plus the geometry ops: rotate, flip, crop. */
     ImageResult transform(byte[] source, FilterSpec spec) throws RemoteException;
 
-    int[] histogram(byte[] source) throws RemoteException;
+    /** Per-channel and luma histograms of the source image. */
+    Histogram histogram(byte[] source) throws RemoteException;
+
+    /** Reduce the image to at most {@code colors} colours (deterministic k-means). */
+    PaletteResult quantize(byte[] source, int colors) throws RemoteException;
 
     /**
      * Returns the payload unchanged. No compute, no image decoding: whatever

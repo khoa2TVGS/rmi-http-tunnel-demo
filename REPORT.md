@@ -188,7 +188,8 @@ One Maven module, three entry points plus shared code:
 | `lab.relay.RelayMain` | the HTTP relay: both tunnel forms, allowlist, chaos knobs, byte counters |
 | `lab.client.LabClient`, `TunnelClientMain`, `DirectClientMain` | client-side helpers and two CLIs |
 | `lab.bench.BenchMain` | measurement matrix -> CSV |
-| `lab.ui.LabApp` | JavaFX client: image lab + benchmark tabs |
+| `lab.ui.LabApp` | JavaFX shell: connection bar + tab per tool |
+| `lab.ui.ImageTool`, `BenchTool`, `TunnelTool` | the three tools |
 | `lab.tunnel.TunnelProbe`, `WireCapture` | verification tools that do not involve RMI |
 
 ### 4.1 The chunked codec
@@ -231,18 +232,65 @@ header on the request, simulate a hostile middlebox:
 
 ### 4.3 The client application
 
-JavaFX, two tabs. *Image lab* sends a deterministic synthetic image through the
-selected filter (`grayscale`, `posterize`, `sobel`, `blur`) and shows both images
-plus three timings: round trip, server work (measured inside the service) and
-transfer (the difference). *Benchmark* runs the matrix and plots transfer time by
-payload and mode; each (workload, mode) combination is a separate child JVM
-because of the socket-factory latch.
+JavaFX, one connection bar and one tab per tool. The bar owns the transport
+(`Direct`, `Tunnel (chunked)`, `Tunnel (CONNECT)`), the endpoint, the relay
+address and the chaos knobs. It is editable only while disconnected: Connect
+installs the chosen transport, Disconnect closes its sockets and hands the bar
+back, so transports can be compared in one session. Each tab is a self-contained
+tool that receives the live stub and never cares how it was reached:
+
+* **Image filter** sends a deterministic synthetic image through the selected
+  filter (`grayscale`, `posterize`, `sobel`, `blur`, `resize`) and shows both
+  images plus three timings: round trip, server work (measured inside the
+  service) and transfer (the difference).
+* **Transform** sends the same image through a geometry operation (rotate
+  90/180/270, flip, crop with a margin slider) and checks the returned pixels.
+  Geometry travels inside the existing `transform` call, so the protocol gained
+  no new method for it.
+* **Histogram** receives four 256-bin arrays (red, green, blue, luma) and draws
+  them on a canvas, with mean luma and peak bin. The reply is a few kilobytes of
+  numbers against a megabyte-scale request, which is the mirror image of the
+  filter tools.
+* **Palette** asks the service for a k-means colour quantisation (2 to 32 colours)
+  and shows the quantised image next to its palette swatches.
+* **Benchmark** runs the matrix and plots transfer time by payload and mode; each
+  (workload, mode) combination is a separate child JVM because the global factory
+  can only be installed once per process.
+* **Tunnel inspector** exercises the transport with RMI removed: it stands up a
+  throw-away echo server on loopback, reaches it through the relay, verifies
+  SHA-256 on both directions, and can print the bytes of one handshake. Failures
+  here belong to the codec, failures in the other tabs belong to RMI -- which is
+  the point of having it as its own tool.
+
+### 4.4 Switching transports in a running client
+
+RMI consults the global `RMISocketFactory` for each new connection, but
+`RMISocketFactory.setSocketFactory` succeeds only once. The client therefore
+installs a `SwitchableSocketFactory` on the first Connect and only retargets it
+afterwards: the wrapper holds a volatile delegate plus a list of live sockets,
+and Disconnect calls `closeAll()`. A test that swapped the delegate for one
+which refuses everything showed the next call failing inside
+`TCPEndpoint.newSocket` -- proof that the factory is consulted per connection,
+not cached with the stub.
+
+The first version of this looked right and failed two runs out of two: the call
+immediately after a switch threw `UnmarshalException: Error unmarshaling return
+header ... Socket closed`. A loop probe that switched transports repeatedly (and
+logged the attempt number on each call) localised it. The failure is neither the
+tunnel nor the direction of the swap: closing a socket merely starts its
+retirement, and until RMI's reader thread notices, the connection is still handed
+out. Two endpoints (registry and object) mean up to two such connections.
+
+The fix is a short retry loop in `connect()`: close everything, look up the
+registry, and make one warm-up `ping()` so the object endpoint is exercised as
+well -- a successful Connect then means both endpoints really answer. 18
+transport switches in the probe pass, and a reconnect costs 40 to 100 ms.
 
 ---
 
 ## 5. Verification
 
-Four gates, each run before moving on:
+Five gates, each run before moving on:
 
 **G1 — plain RMI works.** Direct mode, no tunnel: lookup, call, image returned.
 
@@ -290,6 +338,16 @@ java.rmi.ConnectException: Connection refused to host: 127.0.0.1
 
 Reaching the registry directly is impossible while the tunnel is installed, which
 is exactly the claim being tested.
+
+**G5 -- structured replies through the tunnel.** The newer calls return objects,
+not just images; the same two handshakes appear in the relay log:
+
+```
+histogram    : 79 ms, 262144 pixels, mean luma 131.7, peak bin 114
+               reply 4096 bytes of int arrays for a 659.5 KB request
+palette k=6  : 189 ms, 6 colours kept, 21.5 KB result from a 659.5 KB source
+rotate 90    : 193 ms, 659.1 KB result, sha256 request OK, response OK
+```
 
 **Framing capture** (`lab.tunnel.WireCapture`, no RMI, hand-checkable):
 
